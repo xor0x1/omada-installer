@@ -97,7 +97,10 @@ systemctl enable --now mongod
 
 
 resolve_deb_url() {
-  local UA="Mozilla/5.0"
+  # локальный User-Agent; не зависит от внешней переменной (безопасно при set -u)
+  local _UA="${UA:-Mozilla/5.0}"
+
+  # паттерн по архитектуре
   local patt
   case "$ARCH" in
     amd64) patt='(linux_(x64|amd64|x86_64))' ;;
@@ -105,21 +108,20 @@ resolve_deb_url() {
     *)     die "Неподдерживаемая архитектура: $ARCH (нужны amd64/arm64)" ;;
   esac
 
-  # --- странички, где чаще всего есть ссылки ---
+  # страницы с загрузками
   local pages=(
     "https://support.omadanetworks.com/us/product/omada-software-controller/?resourceType=download"
     "https://www.tp-link.com/support/download/omada-software-controller/"
     "https://www.tp-link.com/us/support/download/omada-software-controller/"
   )
 
-  # вспомогалка: сделать ссылку абсолютной с учётом текущей страницы
+  # helper: абсолютный URL (с учётом CDN)
   __abs() {
     local link="$1" base="$2"
     local host; host="$(printf '%s' "$base" | awk -F/ '{print $3}')"
     if [[ "$link" =~ ^// ]]; then
       printf 'https:%s\n' "$link"
     elif [[ "$link" =~ ^/upload/software/ ]]; then
-      # CDN-пути всегда на static.tp-link.com
       printf 'https://static.tp-link.com%s\n' "$link"
     elif [[ "$link" =~ ^/ ]]; then
       printf 'https://%s%s\n' "$host" "$link"
@@ -128,16 +130,16 @@ resolve_deb_url() {
     fi
   }
 
-  # --- 1) «умный» сбор кандидатов ---
+  # 1) собираем кандидатов
   local url_list; url_list="$(mktemp)"
   for p in "${pages[@]}"; do
     info "Пробую страницу загрузок: $p"
     local page; page="$(mktemp)"
-    if curl -fsSL --compressed -A "$UA" "$p" -o "$page"; then
-      # собираем из разных атрибутов
+    if curl -fsSL --compressed -A "$_UA" "$p" -o "$page"; then
       for attr in 'href' 'data-href' 'data-url' 'content'; do
         grep -oP "${attr}=\"\K[^\" ]+\.deb" "$page" 2>/dev/null \
           | while IFS= read -r u; do __abs "$u" "$p"; done \
+          | grep -E '^https?://.*\.deb($|\?)' \
           | grep -Ei "$patt" \
           | grep -Eiv '(beta|rc)' \
           | sed 's/%20/ /g' \
@@ -146,10 +148,10 @@ resolve_deb_url() {
     fi
   done
 
-  # уникальные кандидаты
-  mapfile -t urls < <(sort -u "$url_list" | grep -E '^https?://' )
+  # уникальные ссылки
+  mapfile -t urls < <(sort -u "$url_list")
   if ((${#urls[@]} > 0)); then
-    # сортируем по версии, свежие в конце
+    # сортируем по версии; свежие в конце
     mapfile -t ordered < <(
       printf '%s\n' "${urls[@]}" \
       | awk -F/ '{
@@ -160,47 +162,40 @@ resolve_deb_url() {
       | sort -V | awk '{print $2}'
     )
 
-    # проверяем доступность через HEAD с редиректами
-    for u in $(printf '%s\n' "${ordered[@]}" | tac); do
+    # проверяем доступность через HEAD с редиректами; берём первый живой
+    local u
+    while IFS= read -r u; do
       [[ "$u" =~ ^https://([a-z0-9.-]+\.)?(omadanetworks\.com|tp-link\.com)/ ]] || continue
       info "Проверяю доступность: $u"
-      if curl -fsIL -A "$UA" "$u" | grep -qE '^HTTP/.* (200|206|302|301)'; then
-        echo "$u"
+      if curl -fsIL -A "$_UA" "$u" >/dev/null; then
+        printf '%s\n' "$u"
         return 0
-      else
-        warn "Недоступно (HEAD != 200/206/30x)"
       fi
-    done
+    done < <(printf '%s\n' "${ordered[@]}" | tac)
   fi
 
-  # --- 2) FALLBACK: ровно как в оригинальном скрипте автора ---
-  info "Фоллбэк-поиск по узкому шаблону (как у автора)"
-  local fallback_page; fallback_page="$(mktemp)"
-  if curl -fsSL --compressed -A "$UA" \
+  # 2) fallback «как у автора»
+  info "Фоллбэк: ищу по узкому шаблону (как в оригинале)"
+  local fp; fp="$(mktemp)"
+  if curl -fsSL --compressed -A "$_UA" \
       "https://support.omadanetworks.com/us/product/omada-software-controller/?resourceType=download" \
-      -o "$fallback_page"; then
-
-    local rx
+      -o "$fp"; then
+    local rx u
     if [[ "$ARCH" == "amd64" ]]; then
       rx='<a[^>]*href="\K[^"]*linux_x64_[0-9]*\.deb[^"]*'
     else
       rx='<a[^>]*href="\K[^"]*linux_arm64_[0-9]*\.deb[^"]*'
     fi
-
-    local u
-    u="$(grep -oPi "$rx" "$fallback_page" | head -n 1 || true)"
+    u="$(grep -oPi "$rx" "$fp" | head -n1 || true)"
     if [[ -n "$u" ]]; then
-      # делаем абсолютным корректно
-      if [[ "$u" =~ ^// ]]; then
-        u="https:${u}"
-      elif [[ "$u" =~ ^/upload/software/ ]]; then
-        u="https://static.tp-link.com${u}"
-      elif [[ "$u" =~ ^/ ]]; then
-        u="https://support.omadanetworks.com${u}"
+      # абсолютим
+      if   [[ "$u" =~ ^// ]]; then u="https:${u}"
+      elif [[ "$u" =~ ^/upload/software/ ]]; then u="https://static.tp-link.com${u}"
+      elif [[ "$u" =~ ^/ ]]; then u="https://support.omadanetworks.com${u}"
       fi
-      # финальная проверка доступности
-      if curl -fsIL -A "$UA" "$u" | grep -qE '^HTTP/.* (200|206|302|301)'; then
-        echo "$u"
+      # финальная проверка
+      if curl -fsIL -A "$_UA" "$u" >/dev/null; then
+        printf '%s\n' "$u"
         return 0
       fi
     fi
@@ -208,6 +203,7 @@ resolve_deb_url() {
 
   die "Не нашёл рабочий .deb для $ARCH; укажите --omada-url."
 }
+
 
 DL_URL=""
 if [[ -n "$OMADA_URL" ]]; then
