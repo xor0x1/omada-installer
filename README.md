@@ -1,37 +1,49 @@
-# Omada Installer
-A script to perform a new install of the TP-Link Omada Software Controller on Ubuntu.
+# Omada Installer (safe fork)
 
-This script was created due to convoluted or outdated guides on the web for installing the Omada Controller. The goal was to create a clean, simple script that anyone can run for ease of deployment.
+> Безопасный установщик TP-Link Omada Software Controller для Ubuntu  
+> _Fork оригинального [omada-installer](https://github.com/monsn0/omada-installer) от [@monsn0](https://github.com/monsn0)._
 
-Special thanks to @willquill for his Omada Ubuntu 16.04 guide :)
+---
 
-### Supported releases
-- Ubuntu 24.04 LTS
-- Ubuntu 22.04 LTS
-- Ubuntu 20.04 LTS
+## О проекте
 
-### Recommended specs
-- Ubuntu 24.04 LTS
-- x86_64 CPU which supports AVX ( Intel Sandy Bridge / AMD Bulldozer or later )
-- 8+ GB disk ( You'll need min 4 GB of free space for MongoDB as found by /u/axel2230 )
-- 1+ GB memory
+Оригинальный [скрипт](https://github.com/monsn0/omada-installer) 
 
-## Install
-Connect via SSH or console, run the following command and enjoy a sip of coffee ;)
+Наш форк сохранил простоту исходного решения, но добавил:
 
-```
-curl -sS https://raw.githubusercontent.com/monsn0/omada-installer/main/install-omada-controller.sh | sudo bash
-```
+- Поддержку **Ubuntu 24.10 (oracular)** с фоллбэком репозитория MongoDB на noble.
+- Безопасные дефолты: `set -Eeuo pipefail`, остановка при ошибках.
+- Автоматическую установку зависимостей (`curl`, `gpg`, `jq`, `tar` и др.).
+- Парсинг последних стабильных версий Omada на сайтах TP-Link / OmadaNetworks  
+  (понимает `.deb` и `.tar.gz` пакеты, ссылки на `static.tp-link.com`).
+- Проверку домена скачиваемого файла и (опционально) SHA256-хеша.
+- Возможность сразу ограничить доступ к веб-интерфейсу (порт `8043`) через UFW.
+- Поддержку как `.deb`, так и архивов `.tar.gz` (автоматический запуск `install.sh`).
+- Корректное завершение установки и автозапуск сервиса.
 
-Once finished, complete the inital setup wizard in your web browser via the URL in the final output.
+> Все оригинальные права на скрипт принадлежат [@monsn0](https://github.com/monsn0).  
+> Наши изменения распространяются на тех же условиях, что и лицензия исходного проекта.
 
-### Ansible playbook
-As an alternative to using the script, you can run the Ansible playbook instead
->You'll need to have Ansible configured in advance
+---
 
-```
-ansible-playbook --ask-become-pass omada-installer-playbook.yaml
-```
+## Поддерживаемые системы
+
+| Ubuntu release | Codename | Статус |
+|----------------|----------|--------|
+| 20.04 LTS      | focal    | ✅ |
+| 22.04 LTS      | jammy    | ✅ |
+| 24.04 LTS      | noble    | ✅ |
+| 24.10          | oracular | ⚠️ — MongoDB берётся из noble repo |
+
+---
+
+## Установка
+
+### 1️⃣ Скачайте и дайте права на запуск
+
+```bash
+curl -sS https://raw.githubusercontent.com/xor0x1/omada-installer/refs/heads/main/install-omada-controller.sh | sudo bash
+
 
 ## Usage
 To manage the controller service, use the `tpeap` script as root.
