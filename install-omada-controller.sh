@@ -116,7 +116,7 @@ make_absolute() {
 }
 
 resolve_deb_url() {
-  local patt page url_list pages best
+  local patt page url_list pages
   case "$ARCH" in
     amd64) patt='(linux_(x64|amd64|x86_64))' ;;
     arm64) patt='(linux_(arm64|aarch64))' ;;
@@ -135,43 +135,46 @@ resolve_deb_url() {
     page="$(mktemp)"
     if curl -fsSL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 40 \
          --compressed -A "$UA" "$p" -o "$page"; then
-      # только .deb
-      grep -oP 'href="\K[^"]+\.deb' "$page" 2>/dev/null \
-        | while read -r u; do make_absolute "$u"; done \
-        | grep -Ei "$patt" \
-        | grep -Eiv '(beta|rc)' \
-        | sort -u >> "$url_list" || true
-      grep -oP 'data-href="\K[^"]+\.deb' "$page" 2>/dev/null \
-        | while read -r u; do make_absolute "$u"; done \
-        | grep -Ei "$patt" \
-        | grep -Eiv '(beta|rc)' \
-        | sort -u >> "$url_list" || true
+      # только .deb — берём из href, data-href, data-url, content
+      for attr in 'href' 'data-href' 'data-url' 'content'; do
+        grep -oP "${attr}=\"\K[^\" ]+\.deb" "$page" 2>/dev/null \
+          | while read -r u; do make_absolute "$u"; done \
+          | grep -Ei "$patt" \
+          | grep -Eiv '(beta|rc)' \
+          | sed 's/%20/ /g' \
+          | sort -u >> "$url_list" || true
+      done
     fi
   done
 
   mapfile -t urls < <(sort -u "$url_list" | grep -E '^https?://')
   [[ ${#urls[@]} -gt 0 ]] || die "Не нашёл .deb Omada для $ARCH на известных страницах."
 
-  # оставляем только доступные (HEAD 200) и с доверенных доменов
-  valid_urls=()
-  for u in "${urls[@]}"; do
-    allow_domain "$u" || continue
-    if curl -fsSI -A "$UA" "$u" | grep -qE '^HTTP/.* 200'; then
-      valid_urls+=("$u")
-    fi
-  done
-  [[ ${#valid_urls[@]} -gt 0 ]] || die "Все найденные .deb недоступны (404/…); укажите --omada-url."
-
-  best="$(
-    printf '%s\n' "${valid_urls[@]}" \
+  # сортируем по версии (возрастающе) — начнём проверку с самых новых
+  mapfile -t ordered < <(
+    printf '%s\n' "${urls[@]}" \
     | awk -F/ '{
         u=$0; f=$NF; ver="0.0.0";
         if (match(f, /[0-9]+(\.[0-9]+){1,3}/)) ver=substr(f,RSTART,RLENGTH);
         print ver " " u
       }' \
-    | sort -V | tail -n1 | awk '{print $2}'
-  )"
-  echo "$best"
+    | sort -V | awk '{print $2}'
+  )
+
+  # пробуем скачать 1 байт у каждого кандидата; берём первый “живой”
+  for u in $(printf '%s\n' "${ordered[@]}" | tac); do
+    allow_domain "$u" || continue
+    info "Проверяю доступность: $u"
+    if curl -fL --retry 2 --retry-all-errors --connect-timeout 8 --max-time 20 \
+         --compressed -A "$UA" --range 0-0 -o /dev/null "$u"; then
+      echo "$u"
+      return 0
+    else
+      warn "Недоступно (404/…): $u"
+    fi
+  done
+
+  die "Все найденные .deb недоступны (404/…); укажите --omada-url."
 }
 
 DL_URL=""
