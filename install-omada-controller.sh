@@ -1,9 +1,10 @@
-#!/usr/bin/env bash
-# title   : install-omada-safe.sh
-# purpose : Safer installer for TP-Link Omada Software Controller (.deb or .tar.gz)
-# supports: Ubuntu 20.04 (focal), 22.04 (jammy), 24.04 (noble), 24.10 (oracular*)
-# note    : *Для 24.10 MongoDB берём из репозитория noble (24.04) — фоллбэк.
-# updated : 2025-09-19
+#!/bin/bash
+#title           :install-omada-controller.sh
+#description     :Installer for TP-Link Omada Software Controller
+#supported       :Ubuntu 20.04 (focal), 22.04 (jammy), 24.04 (noble), 24.10 (oracular*)
+#author          :monsn0
+#date            :2021-07-29
+#updated         :2025-09-19
 
 set -Eeuo pipefail
 IFS=$'\n\t'
