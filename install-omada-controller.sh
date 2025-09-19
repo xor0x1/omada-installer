@@ -185,20 +185,7 @@ done
       }' \
     | sort -V | awk '{print $2}'
   )
-
-  # пробуем скачать 1 байт у каждого кандидата; берём первый “живой”
-  for u in $(printf '%s\n' "${ordered[@]}" | tac); do
-    allow_domain "$u" || continue
-    info "Проверяю доступность: $u"
-    if curl -fL --retry 2 --retry-all-errors --connect-timeout 8 --max-time 20 \
-         --compressed -A "$UA" --range 0-0 -o /dev/null "$u"; then
-      echo "$u"
-      return 0
-    else
-      warn "Недоступно (404/…): $u"
-    fi
-  done
-
+  
   die "Все найденные .deb недоступны (404/…); укажите --omada-url."
 }
 
