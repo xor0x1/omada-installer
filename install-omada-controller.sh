@@ -160,18 +160,17 @@ resolve_deb_url() {
       | sort -V | awk '{print $2}'
     )
 
-    # проверяем доступность через HEAD с редиректами
-    for u in $(printf '%s\n' "${ordered[@]}" | tac); do
-      [[ "$u" =~ ^https://([a-z0-9.-]+\.)?(omadanetworks\.com|tp-link\.com)/ ]] || continue
-      info "Проверяю доступность: $u"
-      if curl -fsIL -A "$UA" "$u" | grep -qE '^HTTP/.* (200|206|302|301)'; then
-        echo "$u"
-        return 0
-      else
-        warn "Недоступно (HEAD != 200/206/30x)"
-      fi
-    done
+# проверяем доступность через HEAD (без range!)
+for u in $(printf '%s\n' "${ordered[@]}" | tac); do
+  [[ "$u" =~ ^https://([a-z0-9.-]+\.)?(omadanetworks\.com|tp-link\.com)/ ]] || continue
+  info "Проверяю доступность: $u"
+  if curl -fsIL -A "$UA" "$u" >/dev/null; then
+    echo "$u"
+    return 0
+  else
+    warn "Недоступно (HEAD != 200/206/30x): $u"
   fi
+done
   
   mapfile -t urls < <(sort -u "$url_list" | grep -E '^https?://')
   [[ ${#urls[@]} -gt 0 ]] || die "Не нашёл .deb Omada для $ARCH на известных страницах."
