@@ -116,37 +116,46 @@ make_absolute() {
 }
 
 resolve_deb_url() {
-  local patt page url_list pages
+  local UA="Mozilla/5.0"
+  local patt
   case "$ARCH" in
     amd64) patt='(linux_(x64|amd64|x86_64))' ;;
     arm64) patt='(linux_(arm64|aarch64))' ;;
     *)     die "Неподдерживаемая архитектура: $ARCH (нужны amd64/arm64)" ;;
   esac
 
-  pages=(
+  # --- 1) «Умный» сбор кандидатов с нескольких страниц ---
+  local pages=(
     "https://support.omadanetworks.com/us/product/omada-software-controller/?resourceType=download"
     "https://www.tp-link.com/support/download/omada-software-controller/"
     "https://www.tp-link.com/us/support/download/omada-software-controller/"
   )
-
-  url_list="$(mktemp)"
+  local url_list; url_list="$(mktemp)"
   for p in "${pages[@]}"; do
-    info "Пробую страницу загрузок: $p"
-    page="$(mktemp)"
-    if curl -fsSL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 40 \
-         --compressed -A "$UA" "$p" -o "$page"; then
-      # только .deb — берём из href, data-href, data-url, content
+    local page; page="$(mktemp)"
+    if curl -fsSL --compressed -A "$UA" "$p" -o "$page"; then
       for attr in 'href' 'data-href' 'data-url' 'content'; do
         grep -oP "${attr}=\"\K[^\" ]+\.deb" "$page" 2>/dev/null \
-          | while read -r u; do make_absolute "$u"; done \
+          | while read -r u; do
+              # абсолютим корректно
+              if [[ "$u" =~ ^// ]]; then
+                printf "https:%s\n" "$u"
+              elif [[ "$u" =~ ^/upload/software/ ]]; then
+                # CDN-пути должны идти на static.tp-link.com
+                printf "https://static.tp-link.com%s\n" "$u"
+              elif [[ "$u" =~ ^/ ]]; then
+                printf "https://support.omadanetworks.com%s\n" "$u"
+              else
+                printf "%s\n" "$u"
+              fi
+            done \
           | grep -Ei "$patt" \
           | grep -Eiv '(beta|rc)' \
-          | sed 's/%20/ /g' \
           | sort -u >> "$url_list" || true
       done
     fi
   done
-
+  
   mapfile -t urls < <(sort -u "$url_list" | grep -E '^https?://')
   [[ ${#urls[@]} -gt 0 ]] || die "Не нашёл .deb Omada для $ARCH на известных страницах."
 
