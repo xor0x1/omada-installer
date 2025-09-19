@@ -6,6 +6,13 @@
 #date            :2021-07-29
 #updated         :2025-09-19
 
+#!/usr/bin/env bash
+# title   : install-omada-safe.sh
+# purpose : Safe installer for TP-Link Omada Controller (.deb only)
+# supports: Ubuntu 20.04 (focal), 22.04 (jammy), 24.04 (noble), 24.10 (oracular*)
+# note    : *Для 24.10 MongoDB берём из репозитория noble (24.04) — фоллбэек.
+# updated : 2025-09-19
+
 set -Eeuo pipefail
 IFS=$'\n\t'
 
@@ -13,27 +20,21 @@ log()  { printf "\033[1;32m[+]\033[0m %s\n" "$*"; }
 info() { printf "\033[0;36m[~]\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m[!]\033[0m %s\n" "$*"; }
 die()  { printf "\033[1;31m[✗]\033[0m %s\n" "$*" >&2; exit 1; }
-cleanup(){ warn "Произошла ошибка. Проверьте сообщения выше."; }
-trap cleanup ERR
+trap 'warn "Произошла ошибка. Проверьте сообщения выше."' ERR
 
 usage() {
   cat <<'USAGE'
-Безопасная установка TP-Link Omada Controller.
+Установщик Omada Controller (.deb только).
 
 Опции:
-  --omada-url URL         Прямая ссылка на Omada (.deb или .tar.gz)
-  --omada-sha256 SHA      SHA256 для файла Omada (рекомендуется)
-  --ufw-allow-cidr CIDR   Разрешить доступ к 8043 только из CIDR (напр.: 192.168.0.0/16)
+  --omada-url URL         Прямая ссылка на .deb Omada (рекомендуется)
+  --omada-sha256 SHA      SHA256 для .deb (опционально, но желательно)
+  --ufw-allow-cidr CIDR   Разрешить доступ к 8043 только из CIDR (например 192.168.0.0/16)
   --help                  Показать помощь
-
-Если URL не указан — скрипт попытается найти последнюю стабильную сборку на сайтах TP-Link.
 USAGE
 }
 
-OMADA_URL=""
-OMADA_SHA=""
-UFW_CIDR=""
-
+OMADA_URL=""; OMADA_SHA=""; UFW_CIDR=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --omada-url)        OMADA_URL="${2:-}"; shift 2 ;;
@@ -44,7 +45,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo -e "\n=== TP-Link Omada Controller — безопасная установка ===\n"
+echo -e "\n=== TP-Link Omada Controller — безопасная установка (.deb) ===\n"
 
 # ---- базовые проверки ----
 [[ "$(id -u)" -eq 0 ]] || die "Нужны права root. Запустите: sudo bash $0 [опции]"
@@ -66,7 +67,7 @@ log "Устанавливаю зависимости"
 apt-get update -qq
 apt-get install -yq --no-install-recommends \
   ca-certificates gnupg curl jq lsb-release apt-transport-https \
-  coreutils grep sed gawk tar
+  coreutils grep sed gawk
 
 # ---- MongoDB 8.0 репозиторий ----
 MONGO_REPO_CODENAME="$OS_CODENAME"
@@ -101,11 +102,8 @@ if [[ -f /etc/mongod.conf ]]; then
 fi
 systemctl enable --now mongod
 
-# ---- получение Omada (.deb или .tar.gz) ----
+# ---- поиск .deb Omada ----
 UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36"
-FILE=""
-DL_URL=""
-PKG_KIND=""
 
 allow_domain() {
   local u="$1"
@@ -114,7 +112,6 @@ allow_domain() {
 }
 
 make_absolute() {
-  # Делает абсолютной: относительные и протокол-независимые ссылки
   local u="$1"
   if [[ "$u" =~ ^// ]]; then
     printf "https:%s" "$u"
@@ -125,16 +122,15 @@ make_absolute() {
   fi
 }
 
-resolve_omada_url() {
-  local patt page url_list best
+resolve_deb_url() {
+  local patt page url_list pages best
   case "$ARCH" in
     amd64) patt='(linux_(x64|amd64|x86_64))' ;;
     arm64) patt='(linux_(arm64|aarch64))' ;;
     *)     die "Неподдерживаемая архитектура: $ARCH (нужны amd64/arm64)" ;;
   esac
 
-  # Несколько возможных страниц с загрузками
-  local pages=(
+  pages=(
     "https://support.omadanetworks.com/us/product/omada-software-controller/?resourceType=download"
     "https://www.tp-link.com/support/download/omada-software-controller/"
     "https://www.tp-link.com/us/support/download/omada-software-controller/"
@@ -146,15 +142,13 @@ resolve_omada_url() {
     page="$(mktemp)"
     if curl -fsSL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 40 \
          --compressed -A "$UA" "$p" -o "$page"; then
-      # собираем .deb и .tar.gz; делаем ссылки абсолютными, убираем дубликаты
-      grep -oP 'href="\K[^"]+\.(deb|tar\.gz)' "$page" 2>/dev/null \
-        | sed 's/"$//' \
+      # только .deb
+      grep -oP 'href="\K[^"]+\.deb' "$page" 2>/dev/null \
         | while read -r u; do make_absolute "$u"; done \
         | grep -Ei "$patt" \
         | grep -Eiv '(beta|rc)' \
         | sort -u >> "$url_list" || true
-      # некоторые страницы кладут ссылки в data-href
-      grep -oP 'data-href="\K[^"]+\.(deb|tar\.gz)' "$page" 2>/dev/null \
+      grep -oP 'data-href="\K[^"]+\.deb' "$page" 2>/dev/null \
         | while read -r u; do make_absolute "$u"; done \
         | grep -Ei "$patt" \
         | grep -Eiv '(beta|rc)' \
@@ -163,10 +157,20 @@ resolve_omada_url() {
   done
 
   mapfile -t urls < <(sort -u "$url_list" | grep -E '^https?://')
-  [[ ${#urls[@]} -gt 0 ]] || die "Не нашёл пакет Omada (.deb/.tar.gz) для $ARCH на известных страницах."
+  [[ ${#urls[@]} -gt 0 ]] || die "Не нашёл .deb Omada для $ARCH на известных страницах."
+
+  # оставляем только доступные (HEAD 200) и с доверенных доменов
+  valid_urls=()
+  for u in "${urls[@]}"; do
+    allow_domain "$u" || continue
+    if curl -fsSI -A "$UA" "$u" | grep -qE '^HTTP/.* 200'; then
+      valid_urls+=("$u")
+    fi
+  done
+  [[ ${#valid_urls[@]} -gt 0 ]] || die "Все найденные .deb недоступны (404/…); укажите --omada-url."
 
   best="$(
-    printf '%s\n' "${urls[@]}" \
+    printf '%s\n' "${valid_urls[@]}" \
     | awk -F/ '{
         u=$0; f=$NF; ver="0.0.0";
         if (match(f, /[0-9]+(\.[0-9]+){1,3}/)) ver=substr(f,RSTART,RLENGTH);
@@ -174,24 +178,23 @@ resolve_omada_url() {
       }' \
     | sort -V | tail -n1 | awk '{print $2}'
   )"
-
-  allow_domain "$best" || die "Подозрительный домен ссылки: $best"
-  curl -fsSI -A "$UA" "$best" | grep -qE '^HTTP/.* 200' || die "HEAD не вернул 200 для $best"
   echo "$best"
 }
 
+DL_URL=""
 if [[ -n "$OMADA_URL" ]]; then
-  info "Использую заданный URL Omada"
+  info "Использую заданный URL Omada (.deb)"
+  [[ "$OMADA_URL" =~ \.deb($|\?) ]] || die "Ожидался .deb: $OMADA_URL"
   [[ "$OMADA_URL" =~ ^https?:// ]] || die "Некорректный URL: $OMADA_URL"
   allow_domain "$OMADA_URL" || die "Подозрительный домен ссылки: $OMADA_URL"
   DL_URL="$OMADA_URL"
 else
-  log "Ищу последнюю стабильную сборку Omada на сайтах TP-Link"
-  DL_URL="$(resolve_omada_url)"
+  log "Ищу последнюю стабильную .deb сборку Omada на сайтах TP-Link"
+  DL_URL="$(resolve_deb_url)"
 fi
 
 FILE="/tmp/$(basename "$DL_URL")"
-log "Скачиваю Omada пакет: $DL_URL"
+log "Скачиваю пакет: $DL_URL"
 curl -fL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 600 \
      --compressed -A "$UA" -o "$FILE" "$DL_URL"
 info "Сохранено: $FILE"
@@ -204,21 +207,9 @@ else
   warn "SHA256 не задан — продолжаю без проверки целостности (рекомендуется указать --omada-sha256)"
 fi
 
-# ---- установка Omada ----
-if [[ "$FILE" =~ \.deb$ ]]; then
-  PKG_KIND="deb"
-  log "Устанавливаю Omada (.deb) через apt"
-  apt-get install -y "$FILE"
-else
-  PKG_KIND="tar"
-  log "Устанавливаю Omada из tar.gz"
-  TMPDIR="$(mktemp -d)"
-  tar -xzf "$FILE" -C "$TMPDIR"
-  INSTALL_SH="$(find "$TMPDIR" -maxdepth 2 -type f -name 'install.sh' | head -n1 || true)"
-  [[ -n "$INSTALL_SH" ]] || die "Не найден install.sh внутри архива"
-  chmod +x "$INSTALL_SH"
-  bash "$INSTALL_SH" -y
-fi
+# ---- установка Omada (.deb) ----
+log "Устанавливаю Omada (.deb) через apt"
+apt-get install -y "$FILE"
 
 # ---- автозапуск сервиса ----
 if systemctl list-unit-files | grep -qiE 'omada|tpeap'; then
@@ -238,6 +229,6 @@ fi
 
 IP="$(hostname -I | awk '{print $1}')"
 echo
-printf "\033[0;32m[✓]\033[0m Omada установлена (%s).\n" "${PKG_KIND:-unknown}"
+printf "\033[0;32m[✓]\033[0m Omada установлена (.deb).\n"
 printf "\033[0;32m[→]\033[0m Откройте: https://%s:8043  (самоподписанный сертификат)\n" "$IP"
 printf "\033[0;32m[ℹ]\033[0m Ограничьте доступ к порту 8043 только из доверенной сети.\n"
