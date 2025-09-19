@@ -160,33 +160,53 @@ resolve_deb_url() {
       | sort -V | awk '{print $2}'
     )
 
-# проверяем доступность через HEAD (без range!)
-for u in $(printf '%s\n' "${ordered[@]}" | tac); do
-  [[ "$u" =~ ^https://([a-z0-9.-]+\.)?(omadanetworks\.com|tp-link\.com)/ ]] || continue
-  info "Проверяю доступность: $u"
-  if curl -fsIL -A "$UA" "$u" >/dev/null; then
-    echo "$u"
-    return 0
-  else
-    warn "Недоступно (HEAD != 200/206/30x): $u"
+    # проверяем доступность через HEAD с редиректами
+    for u in $(printf '%s\n' "${ordered[@]}" | tac); do
+      [[ "$u" =~ ^https://([a-z0-9.-]+\.)?(omadanetworks\.com|tp-link\.com)/ ]] || continue
+      info "Проверяю доступность: $u"
+      if curl -fsIL -A "$UA" "$u" | grep -qE '^HTTP/.* (200|206|302|301)'; then
+        echo "$u"
+        return 0
+      else
+        warn "Недоступно (HEAD != 200/206/30x)"
+      fi
+    done
   fi
-done
-  
-  mapfile -t urls < <(sort -u "$url_list" | grep -E '^https?://')
-  [[ ${#urls[@]} -gt 0 ]] || die "Не нашёл .deb Omada для $ARCH на известных страницах."
 
-  # сортируем по версии (возрастающе) — начнём проверку с самых новых
-  mapfile -t ordered < <(
-    printf '%s\n' "${urls[@]}" \
-    | awk -F/ '{
-        u=$0; f=$NF; ver="0.0.0";
-        if (match(f, /[0-9]+(\.[0-9]+){1,3}/)) ver=substr(f,RSTART,RLENGTH);
-        print ver " " u
-      }' \
-    | sort -V | awk '{print $2}'
-  )
-  
-  die "Все найденные .deb недоступны (404/…); укажите --omada-url."
+  # --- 2) FALLBACK: ровно как в оригинальном скрипте автора ---
+  info "Фоллбэк-поиск по узкому шаблону (как у автора)"
+  local fallback_page; fallback_page="$(mktemp)"
+  if curl -fsSL --compressed -A "$UA" \
+      "https://support.omadanetworks.com/us/product/omada-software-controller/?resourceType=download" \
+      -o "$fallback_page"; then
+
+    local rx
+    if [[ "$ARCH" == "amd64" ]]; then
+      rx='<a[^>]*href="\K[^"]*linux_x64_[0-9]*\.deb[^"]*'
+    else
+      rx='<a[^>]*href="\K[^"]*linux_arm64_[0-9]*\.deb[^"]*'
+    fi
+
+    local u
+    u="$(grep -oPi "$rx" "$fallback_page" | head -n 1 || true)"
+    if [[ -n "$u" ]]; then
+      # делаем абсолютным корректно
+      if [[ "$u" =~ ^// ]]; then
+        u="https:${u}"
+      elif [[ "$u" =~ ^/upload/software/ ]]; then
+        u="https://static.tp-link.com${u}"
+      elif [[ "$u" =~ ^/ ]]; then
+        u="https://support.omadanetworks.com${u}"
+      fi
+      # финальная проверка доступности
+      if curl -fsIL -A "$UA" "$u" | grep -qE '^HTTP/.* (200|206|302|301)'; then
+        echo "$u"
+        return 0
+      fi
+    fi
+  fi
+
+  die "Не нашёл рабочий .deb для $ARCH; укажите --omada-url."
 }
 
 DL_URL=""
