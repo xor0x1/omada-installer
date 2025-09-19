@@ -44,6 +44,7 @@
 ```bash
 curl -sS https://raw.githubusercontent.com/xor0x1/omada-installer/refs/heads/main/install-omada-controller.sh | sudo bash
 
+```
 
 ## Usage
 To manage the controller service, use the `tpeap` script as root.
