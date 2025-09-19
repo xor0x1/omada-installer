@@ -95,25 +95,6 @@ if [[ -f /etc/mongod.conf ]]; then
 fi
 systemctl enable --now mongod
 
-# ---- поиск .deb Omada ----
-UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36"
-
-allow_domain() {
-  local u="$1"
-  [[ "$u" =~ ^https://([a-z0-9.-]+\.)?(omadanetworks\.com|tp-link\.com)/ ]] && return 0
-  return 1
-}
-
-make_absolute() {
-  local u="$1"
-  if [[ "$u" =~ ^// ]]; then
-    printf "https:%s" "$u"
-  elif [[ "$u" =~ ^/ ]]; then
-    printf "https://support.omadanetworks.com%s" "$u"
-  else
-    printf "%s" "$u"
-  fi
-}
 
 resolve_deb_url() {
   local UA="Mozilla/5.0"
