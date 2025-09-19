@@ -1,9 +1,8 @@
 #!/bin/bash
 #title           :install-omada-controller.sh
-#description     :Installer for TP-Link Omada Software Controller
+#description     :Installer for TP-Link Omada Software Controller (.deb only)
 #supported       :Ubuntu 20.04 (focal), 22.04 (jammy), 24.04 (noble), 24.10 (oracular*)
-#author          :monsn0
-#date            :2021-07-29
+#author          :monsn0 (+safe fork tweaks)
 #updated         :2025-09-19
 
 set -Eeuo pipefail
@@ -15,25 +14,27 @@ warn() { printf "\033[1;33m[!]\033[0m %s\n" "$*"; }
 die()  { printf "\033[1;31m[✗]\033[0m %s\n" "$*" >&2; exit 1; }
 trap 'warn "Произошла ошибка. Проверьте сообщения выше."' ERR
 
+# -------- FIX: UA и «обезвреживание» curl-алиасов/функций --------
+UA="${UA:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36}"
+unalias curl 2>/dev/null || true
+unset -f curl 2>/dev/null || true
+CURL() { command curl "$@"; }
+
+allow_domain() {
+  local u="${1:-}"
+  [[ "$u" =~ ^https://([a-z0-9.-]+\.)?(omadanetworks\.com|tp-link\.com)/ ]]
+}
+
 usage() {
   cat <<'USAGE'
 Установщик Omada Controller (.deb только).
 
 Опции:
-  --omada-url URL         Прямая ссылка на .deb Omada (рекомендуется)
-  --omada-sha256 SHA      SHA256 для .deb (опционально, но желательно)
-  --ufw-allow-cidr CIDR   Разрешить доступ к 8043 только из CIDR (например 192.168.0.0/16)
+  --omada-url URL         Прямая ссылка на .deb Omada
+  --omada-sha256 SHA      SHA256 для .deb (опционально)
+  --ufw-allow-cidr CIDR   Разрешить доступ к 8043 только из CIDR (пример 192.168.0.0/16)
   --help                  Показать помощь
 USAGE
-}
-
-# FIX: глобальный User-Agent, чтобы не было "UA: unbound variable"
-UA="${UA:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36}"
-
-# FIX: проверка домена, вызывается при --omada-url
-allow_domain() {
-  local u="${1:-}"
-  [[ "$u" =~ ^https://([a-z0-9.-]+\.)?(omadanetworks\.com|tp-link\.com)/ ]]
 }
 
 OMADA_URL=""; OMADA_SHA=""; UFW_CIDR=""
@@ -59,12 +60,12 @@ case "${VERSION_CODENAME:-}" in
   focal|jammy|noble|oracular) OS_CODENAME="$VERSION_CODENAME" ;;
   *) die "Поддерживаются только Ubuntu 20.04/22.04/24.04/24.10";;
 esac
-ARCH="$(dpkg --print-architecture)" # amd64/arm64
+ARCH="$(dpkg --print-architecture)"  # amd64|arm64
 info "Обнаружена Ubuntu $VERSION_ID ($OS_CODENAME), arch=$ARCH"
 
 export DEBIAN_FRONTEND=noninteractive
 
-# (необяз.) Если Omada уже стоит — выходим
+# (необяз.) уже установлено?
 if dpkg -l | grep -qE '^ii\s+omada(-controller)?\s'; then
   info "Omada уже установлена:"
   dpkg -l | grep -E '^ii\s+omada(-controller)?\s' || true
@@ -73,12 +74,13 @@ fi
 
 # ---- зависимости ----
 log "Устанавливаю зависимости"
+CURL -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc >/dev/null || true  # трогаем сеть, чтобы apt не подвис на DNS
 apt-get update -qq
 apt-get install -yq --no-install-recommends \
   ca-certificates gnupg curl jq lsb-release apt-transport-https \
   coreutils grep sed gawk
 
-# ---- MongoDB 8.0 репозиторий ----
+# ---- MongoDB 8.0 repo ----
 MONGO_REPO_CODENAME="$OS_CODENAME"
 if [[ "$OS_CODENAME" == "oracular" ]]; then
   warn "MongoDB 8.0 для Ubuntu 24.10 отсутствует; использую репозиторий noble (24.04)."
@@ -86,7 +88,7 @@ if [[ "$OS_CODENAME" == "oracular" ]]; then
 fi
 
 log "Добавляю репозиторий MongoDB 8.0 и настраиваю пиннинг"
-curl -fsSL --proto '=https' --tlsv1.2 https://www.mongodb.org/static/pgp/server-8.0.asc \
+CURL -fsSL --proto '=https' --tlsv1.2 https://www.mongodb.org/static/pgp/server-8.0.asc \
   | gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
 
 echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg] https://repo.mongodb.org/apt/ubuntu ${MONGO_REPO_CODENAME}/mongodb-org/8.0 multiverse" \
@@ -111,12 +113,9 @@ if [[ -f /etc/mongod.conf ]]; then
 fi
 systemctl enable --now mongod
 
-# -----------------------------
-# Поиск .deb — ФУНКЦИЯ
-# -----------------------------
+# ---- поиск .deb ----
 resolve_deb_url() {
-  local _UA="${UA:-Mozilla/5.0}"
-
+  local _UA="$UA"
   local patt
   case "$ARCH" in
     amd64) patt='(linux_(x64|amd64|x86_64))' ;;
@@ -143,11 +142,11 @@ resolve_deb_url() {
   for p in "${pages[@]}"; do
     info "Пробую страницу загрузок: $p"
     local page; page="$(mktemp)"
-    if curl -fsSL --compressed -A "$_UA" "$p" -o "$page"; then
+    if CURL -fsSL --compressed -A "$_UA" "$p" -o "$page"; then
       for attr in 'href' 'data-href' 'data-url' 'content'; do
         grep -oP "${attr}=\"\K[^\" ]+\.deb" "$page" 2>/dev/null \
         | while IFS= read -r u; do __abs "$u" "$p"; done \
-        | grep -E '^https?://.*\.deb($|\?)' \
+        | grep -E '^https://.*\.deb($|\?)' \
         | grep -Ei "$patt" \
         | grep -Eiv '(beta|rc)' \
         | sed 's/%20/ /g' \
@@ -167,21 +166,19 @@ resolve_deb_url() {
         }' \
       | sort -V | awk '{print $2}'
     )
-
     local u
     while IFS= read -r u; do
-      [[ "$u" =~ ^https://([a-z0-9.-]+\.)?(omadanetworks\.com|tp-link\.com)/ ]] || continue
+      allow_domain "$u" || continue
       info "Проверяю доступность: $u"
-      if curl -fsIL -A "$_UA" "$u" >/dev/null; then
-        printf '%s\n' "$u"
-        return 0
+      if CURL -fsIL -A "$_UA" -L "$u" >/dev/null; then
+        printf '%s\n' "$u"; return 0
       fi
     done < <(printf '%s\n' "${ordered[@]}" | tac)
   fi
 
   info "Фоллбэк: ищу по узкому шаблону (как в оригинале)"
   local fp; fp="$(mktemp)"
-  if curl -fsSL --compressed -A "$_UA" \
+  if CURL -fsSL --compressed -A "$_UA" \
       "https://support.omadanetworks.com/us/product/omada-software-controller/?resourceType=download" \
       -o "$fp"; then
     local rx u
@@ -196,9 +193,8 @@ resolve_deb_url() {
       elif [[ "$u" =~ ^/upload/software/ ]]; then u="https://static.tp-link.com${u}"
       elif [[ "$u" =~ ^/ ]]; then u="https://support.omadanetworks.com${u}"
       fi
-      if curl -fsIL -A "$_UA" "$u" >/dev/null; then
-        printf '%s\n' "$u"
-        return 0
+      if CURL -fsIL -A "$_UA" -L "$u" >/dev/null; then
+        printf '%s\n' "$u"; return 0
       fi
     fi
   fi
@@ -220,7 +216,7 @@ fi
 
 FILE="/tmp/$(basename "$DL_URL")"
 log "Скачиваю пакет: $DL_URL"
-curl -fL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 600 \
+CURL -fL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 600 \
      --compressed -A "$UA" -o "$FILE" "$DL_URL"
 info "Сохранено: $FILE"
 
