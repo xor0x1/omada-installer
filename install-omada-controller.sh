@@ -51,7 +51,7 @@ lscpu | grep -iq 'avx' || die "CPU без AVX. MongoDB 5.0+/8.0 требует A
 [[ -r /etc/os-release ]] || die "Не могу прочитать /etc/os-release"
 . /etc/os-release
 case "${VERSION_CODENAME:-}" in
-  focal|jammy|noble|oracular|plucky) OS_CODENAME="$VERSION_CODENAME" ;;
+  focal|jammy|noble|oracular|Plucky) OS_CODENAME="$VERSION_CODENAME" ;;
   *) die "Поддерживаются только Ubuntu 20.04/22.04/24.04/24.10";;
 esac
 ARCH="$(dpkg --print-architecture)"  # amd64|arm64
