@@ -51,7 +51,7 @@ lscpu | grep -iq 'avx' || die "CPU без AVX. MongoDB 5.0+/8.0 требует A
 [[ -r /etc/os-release ]] || die "Не могу прочитать /etc/os-release"
 . /etc/os-release
 case "${VERSION_CODENAME:-}" in
-  focal|jammy|noble|oracular) OS_CODENAME="$VERSION_CODENAME" ;;
+  focal|jammy|noble|oracular|plucky) OS_CODENAME="$VERSION_CODENAME" ;;
   *) die "Поддерживаются только Ubuntu 20.04/22.04/24.04/24.10";;
 esac
 ARCH="$(dpkg --print-architecture)"  # amd64|arm64
@@ -68,7 +68,7 @@ apt-get install -yq --no-install-recommends \
 
 # ---- MongoDB 8.0 ----
 MONGO_REPO_CODENAME="$OS_CODENAME"
-if [[ "$OS_CODENAME" == "oracular" ]]; then
+if [[ "$OS_CODENAME" == "oracular,plucky" ]]; then
   warn "MongoDB 8.0 для Ubuntu 24.10 отсутствует; использую репозиторий noble (24.04)."
   MONGO_REPO_CODENAME="noble"
 fi
