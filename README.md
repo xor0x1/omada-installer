@@ -10,7 +10,7 @@
 Оригинальный [скрипт](https://github.com/monsn0/omada-installer) 
 
 Наш форк сохранил простоту исходного решения, но добавил:
-
+- Поддержку **Ubuntu 25.04 (plucky)** с фоллбэком репозитория MongoDB на noble.
 - Поддержку **Ubuntu 24.10 (oracular)** с фоллбэком репозитория MongoDB на noble.
 - Безопасные дефолты: `set -Eeuo pipefail`, остановка при ошибках.
 - Автоматическую установку зависимостей (`curl`, `gpg`, `jq`, `tar` и др.).
@@ -34,6 +34,7 @@
 | 22.04 LTS      | jammy    | ✅ |
 | 24.04 LTS      | noble    | ✅ |
 | 24.10          | oracular | ⚠️ — MongoDB берётся из noble repo |
+| 25.04          | plucky | ⚠️ — MongoDB берётся из noble repo |
 
 ---
 
@@ -60,10 +61,3 @@ stop       - stop  the service(s)
 status     - show the status of the service(s)
 version    - show the version of the service(s)
 ```
-
-## Links
-Offical guide: https://www.tp-link.com/us/support/faq/3272/
-
-Guide by @willquill : https://www.reddit.com/r/HomeNetworking/comments/mv1v9d/guide_how_to_set_up_omada_controller_in_ubuntu/ / https://github.com/willquill/omada-ubuntu
-
-Upgrade guide: https://www.tp-link.com/en/omada-sdn/controller-upgrade/
