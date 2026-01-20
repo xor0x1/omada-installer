@@ -105,8 +105,8 @@ if [[ -n "$OMADA_URL" ]]; then
   DL_URL="$OMADA_URL"
 else
   log "Парсинг ссылки Omada (как у автора)"
-  PAGE="https://support.omadanetworks.com/us/product/omada-software-controller/?resourceType=download"
-
+  #PAGE="https://support.omadanetworks.com/us/product/omada-software-controller/?resourceType=download"
+  PAGE="https://support.omadanetworks.com/us/download/software/omada-controller"
   # шаблон по архитектуре (узкий, как в оригинале)
   if [[ "$ARCH" == "amd64" ]]; then
     RX='<a[^>]*href="\K[^"]*linux_x64_[0-9]*\.deb[^"]*'
