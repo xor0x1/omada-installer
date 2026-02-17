@@ -3,7 +3,7 @@
 #description     :Installer for TP-Link Omada Software Controller (.deb only, author-style parsing)
 #supported       :Ubuntu 20.04 (focal), 22.04 (jammy), 24.04 (noble), 24.10 (oracular*), 25.04 (plucky*)
 #author          :monsn0 (+minimal fork)
-#updated         :2025-09-19
+#updated         :2026-02-17
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo -e "\n=== TP-Link Omada Controller — установка (.deb, упрощённый парсинг) ===\n"
+echo -e "\n=== TP-Link Omada Controller — установка/обновление ===\n"
 
 # ---- проверки окружения ----
 [[ "$(id -u)" -eq 0 ]] || die "Нужны права root. Запустите: sudo bash $0 [опции]"
@@ -95,7 +95,20 @@ Pin-Priority: 1001
 PREF
 
   apt-get update -qq
-  apt-get install -y mongodb-org openjdk-21-jre-headless jsvc
+  
+  # Удаляем старые пакеты MongoDB из Ubuntu репо (конфликтуют с официальными)
+  if dpkg -l | grep -qE 'mongodb-server|mongo-tools'; then
+    log "Удаляю старые пакеты MongoDB (конфликт с официальным репо)"
+    systemctl stop mongodb 2>/dev/null || true
+    systemctl stop mongod 2>/dev/null || true
+    dpkg --remove --force-remove-reinstreq mongodb-server-core mongodb-server mongodb-clients mongo-tools mongodb 2>/dev/null || true
+    apt-get remove -y --purge 'mongodb*' 'mongo-tools*' 2>/dev/null || true
+    apt-get autoremove -y
+    dpkg --configure -a
+    apt-get install -f -y
+  fi
+  
+  apt-get install -y -o Dpkg::Options::="--force-overwrite" mongodb-org openjdk-21-jre-headless jsvc
 
   # bindIp safety
   if [[ -f /etc/mongod.conf ]]; then
@@ -153,7 +166,7 @@ fi
 # ---- Загрузка и установка ----
 FILE="/tmp/$(basename "$DL_URL")"
 log "Скачиваю пакет: $DL_URL"
-CURL -fL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 600 \
+CURL -fL --retry 3 --connect-timeout 10 --max-time 600 \
      --compressed -A "$UA" -o "$FILE" "$DL_URL"
 info "Сохранено: $FILE"
 
