@@ -104,30 +104,37 @@ if [[ -n "$OMADA_URL" ]]; then
   [[ "$OMADA_URL" =~ \.deb($|\?) ]] || die "Ожидался .deb: $OMADA_URL"
   DL_URL="$OMADA_URL"
 else
-  log "Парсинг ссылки Omada (как у автора)"
-  #PAGE="https://support.omadanetworks.com/us/product/omada-software-controller/?resourceType=download"
-  PAGE="https://support.omadanetworks.com/us/download/software/omada-controller"
-  # шаблон по архитектуре (узкий, как в оригинале)
+  log "Парсинг ссылки Omada"
+  # Страница рендерится JS (Nuxt), поэтому парсим JSON API firmware-листа
+  API_URL="https://support.omadanetworks.com/api/product/getProductSoftwareList"
+  # productId для Omada Controller = 1879 (можно проверить через DevTools)
+  json="$(CURL -fsSL --compressed -A "$UA" \
+    -H 'Content-Type: application/json' \
+    -d '{"productId":1879,"pageIndex":1,"pageSize":50}' \
+    "$API_URL" 2>/dev/null || true)"
+
   if [[ "$ARCH" == "amd64" ]]; then
-    RX='<a[^>]*href="\K[^"]*linux_x64_[0-9]*\.deb[^"]*'
+    ARCH_PATTERN="linux_x64"
   else
-    RX='<a[^>]*href="\K[^"]*linux_arm64_[0-9]*\.deb[^"]*'
+    ARCH_PATTERN="linux_arm64"
   fi
 
-  # 1) тянем страницу
-  html="$(CURL -fsSL --compressed -A "$UA" "$PAGE")"
+  # Извлекаем первую .deb ссылку нужной архитектуры
+  raw_url="$(printf '%s' "$json" | grep -oP '"downloadUrl"\s*:\s*"\K[^"]*'"${ARCH_PATTERN}"'[^"]*\.deb' | head -n1 || true)"
 
-  # 2) берём ПЕРВУЮ подходящую ссылку
-  raw_url="$(printf '%s' "$html" | grep -oPi "$RX" | head -n1 || true)"
-  [[ -n "$raw_url" ]] || die "Не удалось найти .deb ссылку на странице загрузки."
+  # Фоллбэк: если API не отдал — пробуем известный CDN-паттерн последней версии
+  if [[ -z "$raw_url" ]]; then
+    warn "API не вернул ссылку, пробую фоллбэк на static.tp-link.com"
+    # Пробуем скачать индекс директории или известную последнюю версию
+    FALLBACK_URL="https://static.tp-link.com/upload/software/2026/202601/20260121/Omada_Network_Application_v6.1.0.19_linux_x64_20260117100106.deb"
+    if CURL -fsSL --head "$FALLBACK_URL" >/dev/null 2>&1; then
+      raw_url="$FALLBACK_URL"
+    else
+      die "Не удалось найти .deb ссылку. Укажите URL вручную: --omada-url <URL>"
+    fi
+  fi
 
-  # 3) делаем абсолютной (учёт CDN)
-  case "$raw_url" in
-    //*)    DL_URL="https:${raw_url}" ;;
-    /upload/software/*) DL_URL="https://static.tp-link.com${raw_url}" ;;
-    /*)     DL_URL="https://support.omadanetworks.com${raw_url}" ;;
-    *)      DL_URL="$raw_url" ;;
-  esac
+  DL_URL="$raw_url"
 fi
 
 # ---- Загрузка и установка ----
@@ -143,8 +150,32 @@ if [[ -n "$OMADA_SHA" ]]; then
   [[ "$DOWN_SHA" == "$OMADA_SHA" ]] || die "Несовпадение SHA256 (ожидалось $OMADA_SHA, получено $DOWN_SHA)"
 fi
 
+# ---- Бэкап перед обновлением ----
+OMADA_DATA="/opt/tplink/EAPController/data"
+if [[ -d "$OMADA_DATA" ]]; then
+  BACKUP_DIR="/var/backups/omada"
+  mkdir -p "$BACKUP_DIR"
+  BACKUP_FILE="$BACKUP_DIR/omada-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+  log "Обнаружена существующая установка, создаю бэкап: $BACKUP_FILE"
+  
+  # Останавливаем сервис для консистентности
+  if systemctl is-active --quiet tpeap 2>/dev/null; then
+    systemctl stop tpeap
+    RESTART_SVC=1
+  fi
+  
+  tar -czf "$BACKUP_FILE" -C /opt/tplink/EAPController data 2>/dev/null || warn "Не удалось создать полный бэкап"
+  info "Бэкап сохранён: $(du -h "$BACKUP_FILE" | cut -f1)"
+  
+  # Удаляем старые бэкапы (оставляем последние 5)
+  ls -t "$BACKUP_DIR"/omada-backup-*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+fi
+
 log "Устанавливаю Omada (.deb)"
 apt-get install -y "$FILE"
+
+# Перезапуск если останавливали
+[[ "${RESTART_SVC:-}" == "1" ]] && systemctl start tpeap || true
 
 # ---- Автозапуск + UFW ----
 if systemctl list-unit-files | grep -qiE 'omada|tpeap'; then
