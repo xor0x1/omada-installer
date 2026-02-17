@@ -3,7 +3,7 @@
 #description     :Installer for TP-Link Omada Software Controller (.deb only, author-style parsing)
 #supported       :Ubuntu 20.04 (focal), 22.04 (jammy), 24.04 (noble), 24.10 (oracular*), 25.04 (plucky*)
 #author          :monsn0 (+minimal fork)
-#updated         :2025-09-19
+#updated         :2026-02-17
 
 set -Eeuo pipefail
 IFS=$'\n\t'
