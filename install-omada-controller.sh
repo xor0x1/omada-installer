@@ -3,7 +3,7 @@
 #description     :Installer for TP-Link Omada Software Controller (.deb only, author-style parsing)
 #supported       :Ubuntu 20.04 (focal), 22.04 (jammy), 24.04 (noble), 24.10 (oracular*), 25.04 (plucky*)
 #author          :monsn0 (+minimal fork)
-#updated         :2026-02-17
+#updated         :2025-09-19
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -47,7 +47,6 @@ echo -e "\n=== TP-Link Omada Controller — установка (.deb, упрощ
 
 # ---- проверки окружения ----
 [[ "$(id -u)" -eq 0 ]] || die "Нужны права root. Запустите: sudo bash $0 [опции]"
-lscpu | grep -iq 'avx' || die "CPU без AVX. MongoDB 5.0+/8.0 требует AVX."
 [[ -r /etc/os-release ]] || die "Не могу прочитать /etc/os-release"
 . /etc/os-release
 case "${VERSION_CODENAME:-}" in
@@ -59,6 +58,13 @@ info "Обнаружена Ubuntu $VERSION_ID ($OS_CODENAME), arch=$ARCH"
 
 export DEBIAN_FRONTEND=noninteractive
 
+# ---- Проверка существующей установки ----
+OMADA_INSTALLED=0
+if [[ -d "/opt/tplink/EAPController" ]] || dpkg -l | grep -qi 'omada'; then
+  OMADA_INSTALLED=1
+  info "Обнаружена существующая установка Omada — режим обновления"
+fi
+
 # ---- deps ----
 log "Устанавливаю зависимости"
 apt-get update -qq
@@ -66,36 +72,43 @@ apt-get install -yq --no-install-recommends \
   ca-certificates gnupg curl jq lsb-release apt-transport-https \
   coreutils grep sed gawk
 
-# ---- MongoDB 8.0 ----
-MONGO_REPO_CODENAME="$OS_CODENAME"
-if [[ "$OS_CODENAME" == "oracular" || "$OS_CODENAME" == "plucky" ]]; then
-  warn "MongoDB 8.0 для Ubuntu $VERSION_ID отсутствует; использую репозиторий noble (24.04) как фоллбэк."
-  MONGO_REPO_CODENAME="noble"
-fi
+# ---- MongoDB 8.0 (только для новой установки) ----
+if [[ "$OMADA_INSTALLED" -eq 0 ]]; then
+  # Проверка AVX нужна только при установке MongoDB
+  lscpu | grep -iq 'avx' || die "CPU без AVX. MongoDB 5.0+/8.0 требует AVX."
+  
+  MONGO_REPO_CODENAME="$OS_CODENAME"
+  if [[ "$OS_CODENAME" == "oracular" || "$OS_CODENAME" == "plucky" ]]; then
+    warn "MongoDB 8.0 для Ubuntu $VERSION_ID отсутствует; использую репозиторий noble (24.04) как фоллбэк."
+    MONGO_REPO_CODENAME="noble"
+  fi
 
-log "Добавляю репозиторий MongoDB 8.0"
-CURL -fsSL --proto '=https' --tlsv1.2 https://www.mongodb.org/static/pgp/server-8.0.asc \
-  | gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
-echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg] https://repo.mongodb.org/apt/ubuntu ${MONGO_REPO_CODENAME}/mongodb-org/8.0 multiverse" \
-  > /etc/apt/sources.list.d/mongodb-org-8.0.list
-cat >/etc/apt/preferences.d/mongodb-org-8.0.pref <<'PREF'
+  log "Добавляю репозиторий MongoDB 8.0"
+  CURL -fsSL --proto '=https' --tlsv1.2 https://www.mongodb.org/static/pgp/server-8.0.asc \
+    | gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
+  echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg] https://repo.mongodb.org/apt/ubuntu ${MONGO_REPO_CODENAME}/mongodb-org/8.0 multiverse" \
+    > /etc/apt/sources.list.d/mongodb-org-8.0.list
+  cat >/etc/apt/preferences.d/mongodb-org-8.0.pref <<'PREF'
 Package: mongodb-org*
 Pin: version 8.0*
 Pin-Priority: 1001
 PREF
 
-apt-get update -qq
-apt-get install -y mongodb-org openjdk-21-jre-headless jsvc
+  apt-get update -qq
+  apt-get install -y mongodb-org openjdk-21-jre-headless jsvc
 
-# bindIp safety
-if [[ -f /etc/mongod.conf ]]; then
-  if grep -qE '^\s*bindIp\s*:' /etc/mongod.conf; then
-    sed -E -i 's/^\s*bindIp\s*:\s*.*/  bindIp: 127.0.0.1/' /etc/mongod.conf || true
-  else
-    awk '1; END{print "net:\n  bindIp: 127.0.0.1"}' /etc/mongod.conf > /etc/mongod.conf.new && mv /etc/mongod.conf.new /etc/mongod.conf
+  # bindIp safety
+  if [[ -f /etc/mongod.conf ]]; then
+    if grep -qE '^\s*bindIp\s*:' /etc/mongod.conf; then
+      sed -E -i 's/^\s*bindIp\s*:\s*.*/  bindIp: 127.0.0.1/' /etc/mongod.conf || true
+    else
+      awk '1; END{print "net:\n  bindIp: 127.0.0.1"}' /etc/mongod.conf > /etc/mongod.conf.new && mv /etc/mongod.conf.new /etc/mongod.conf
+    fi
   fi
+  systemctl enable --now mongod
+else
+  info "MongoDB уже настроен, пропускаю установку"
 fi
-systemctl enable --now mongod
 
 # ---- Получение ссылки Omada ----
 # Если URL задан – используем его
@@ -194,6 +207,10 @@ fi
 
 IP="$(hostname -I | awk '{print $1}')"
 echo
-printf "\033[0;32m[✓]\033[0m Omada установлена.\n"
+if [[ "$OMADA_INSTALLED" -eq 1 ]]; then
+  printf "\033[0;32m[✓]\033[0m Omada обновлена.\n"
+else
+  printf "\033[0;32m[✓]\033[0m Omada установлена.\n"
+fi
 printf "\033[0;32m[→]\033[0m Откройте: https://%s:8043  (самоподписанный сертификат)\n" "$IP"
 printf "\033[0;32m[ℹ]\033[0m Ограничьте доступ к порту 8043 только из доверенной сети.\n"
