@@ -145,13 +145,9 @@ if [[ -n "$OMADA_URL" ]]; then
   DL_URL="$OMADA_URL"
 else
   log "Парсинг ссылки Omada"
-  # Страница рендерится JS (Nuxt), поэтому парсим JSON API firmware-листа
-  API_URL="https://support.omadanetworks.com/api/product/getProductSoftwareList"
-  # productId для Omada Controller = 1879 (можно проверить через DevTools)
-  json="$(CURL -fsSL --compressed -A "$UA" \
-    -H 'Content-Type: application/json' \
-    -d '{"productId":1879,"pageIndex":1,"pageSize":50}' \
-    "$API_URL" 2>/dev/null || true)"
+  # API (getProductSoftwareList) требует авторизацию и отдаёт 401,
+  # поэтому парсим HTML страницы загрузок — там прямые ссылки на static.tp-link.com
+  DL_PAGE="https://support.omadanetworks.com/us/download/software/omada-controller/"
 
   if [[ "$ARCH" == "amd64" ]]; then
     ARCH_PATTERN="linux_x64"
@@ -159,28 +155,19 @@ else
     ARCH_PATTERN="linux_arm64"
   fi
 
-  # Извлекаем ВСЕ .deb ссылки нужной архитектуры и выбираем максимальную версию
-  raw_url="$(printf '%s' "$json" \
-    | grep -oP '"downloadUrl"\s*:\s*"\K[^"]*'"${ARCH_PATTERN}"'[^"]*\.deb' \
-    | sort -t_ -k4 -V \
-    | tail -n1 || true)"
+  html="$(CURL -fsSL --compressed -A "$UA" "$DL_PAGE" 2>/dev/null || true)"
 
-  # Фоллбэк: если API не отдал — пробуем известный CDN-URL, но НЕ ниже установленной версии
-  if [[ -z "$raw_url" ]]; then
-    warn "API не вернул ссылку, пробую фоллбэк на static.tp-link.com"
-    FALLBACK_URL="https://static.tp-link.com/upload/software/2026/202601/20260121/Omada_Network_Application_v6.1.0.19_linux_x64_20260117100106.deb"
-    FB_VER="$(ver_from_url "$FALLBACK_URL")"
-    if [[ -n "$INSTALLED_VER" && -n "$FB_VER" \
-          && "$INSTALLED_VER" != "$FB_VER" \
-          && "$(printf '%s\n%s\n' "$INSTALLED_VER" "$FB_VER" | sort -V | tail -n1)" == "$INSTALLED_VER" ]]; then
-      die "Фоллбэк-версия $FB_VER старше установленной $INSTALLED_VER. Укажите URL вручную: --omada-url <URL>"
-    fi
-    if CURL -fsSL --head "$FALLBACK_URL" >/dev/null 2>&1; then
-      raw_url="$FALLBACK_URL"
-    else
-      die "Не удалось найти .deb ссылку. Укажите URL вручную: --omada-url <URL>"
-    fi
-  fi
+  # Извлекаем ВСЕ .deb ссылки нужной архитектуры и выбираем максимальную версию.
+  # Сортировка по версии из имени файла (после _v), а не по позиции на странице.
+  raw_url="$(printf '%s' "$html" \
+    | grep -oP 'https://static\.tp-link\.com/[^"'"'"' )]*'"${ARCH_PATTERN}"'[^"'"'"' )]*\.deb' \
+    | sort -u \
+    | awk '{ v=$0; sub(/.*_v/,"",v); sub(/_.*/,"",v); print v"\t"$0 }' \
+    | sort -V \
+    | tail -n1 \
+    | cut -f2- || true)"
+
+  [[ -n "$raw_url" ]] || die "Не удалось найти .deb ссылку на странице загрузок. Укажите URL вручную: --omada-url <URL>"
 
   # Защита от даунгрейда / проверка актуальности при успешном парсинге
   NEW_VER="$(ver_from_url "$raw_url")"
