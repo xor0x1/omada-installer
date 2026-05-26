@@ -3,7 +3,7 @@
 #description     :Installer for TP-Link Omada Software Controller (.deb only, author-style parsing)
 #supported       :Ubuntu 20.04 (focal), 22.04 (jammy), 24.04 (noble), 24.10 (oracular*), 25.04 (plucky*)
 #author          :monsn0 (+minimal fork)
-#updated         :2026-02-17
+#updated         :2026-05-26
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -58,12 +58,26 @@ info "Обнаружена Ubuntu $VERSION_ID ($OS_CODENAME), arch=$ARCH"
 
 export DEBIAN_FRONTEND=noninteractive
 
+# ---- хелперы версий ----
+# Извлечь версию из имени .deb (например ..._v6.1.0.19_linux_x64... -> 6.1.0.19)
+ver_from_url() {
+  printf '%s' "$1" | grep -oP '_v\K[0-9]+(\.[0-9]+)*' | head -n1
+}
+# Установленная версия Omada (только числовая часть)
+get_installed_omada_version() {
+  { dpkg-query -W -f='${Version}' omadac 2>/dev/null \
+      || dpkg -l 2>/dev/null | awk 'tolower($2) ~ /omada/ {print $3; exit}'; } \
+    | grep -oP '^[0-9]+(\.[0-9]+)*' | head -n1 || true
+}
+
 # ---- Проверка существующей установки ----
 OMADA_INSTALLED=0
 if [[ -d "/opt/tplink/EAPController" ]] || dpkg -l | grep -qi 'omada'; then
   OMADA_INSTALLED=1
   info "Обнаружена существующая установка Omada — режим обновления"
 fi
+INSTALLED_VER="$(get_installed_omada_version)"
+[[ -n "$INSTALLED_VER" ]] && info "Установленная версия: $INSTALLED_VER"
 
 # ---- deps ----
 log "Устанавливаю зависимости"
@@ -145,18 +159,38 @@ else
     ARCH_PATTERN="linux_arm64"
   fi
 
-  # Извлекаем первую .deb ссылку нужной архитектуры
-  raw_url="$(printf '%s' "$json" | grep -oP '"downloadUrl"\s*:\s*"\K[^"]*'"${ARCH_PATTERN}"'[^"]*\.deb' | head -n1 || true)"
+  # Извлекаем ВСЕ .deb ссылки нужной архитектуры и выбираем максимальную версию
+  raw_url="$(printf '%s' "$json" \
+    | grep -oP '"downloadUrl"\s*:\s*"\K[^"]*'"${ARCH_PATTERN}"'[^"]*\.deb' \
+    | sort -t_ -k4 -V \
+    | tail -n1 || true)"
 
-  # Фоллбэк: если API не отдал — пробуем известный CDN-паттерн последней версии
+  # Фоллбэк: если API не отдал — пробуем известный CDN-URL, но НЕ ниже установленной версии
   if [[ -z "$raw_url" ]]; then
     warn "API не вернул ссылку, пробую фоллбэк на static.tp-link.com"
-    # Пробуем скачать индекс директории или известную последнюю версию
     FALLBACK_URL="https://static.tp-link.com/upload/software/2026/202601/20260121/Omada_Network_Application_v6.1.0.19_linux_x64_20260117100106.deb"
+    FB_VER="$(ver_from_url "$FALLBACK_URL")"
+    if [[ -n "$INSTALLED_VER" && -n "$FB_VER" \
+          && "$INSTALLED_VER" != "$FB_VER" \
+          && "$(printf '%s\n%s\n' "$INSTALLED_VER" "$FB_VER" | sort -V | tail -n1)" == "$INSTALLED_VER" ]]; then
+      die "Фоллбэк-версия $FB_VER старше установленной $INSTALLED_VER. Укажите URL вручную: --omada-url <URL>"
+    fi
     if CURL -fsSL --head "$FALLBACK_URL" >/dev/null 2>&1; then
       raw_url="$FALLBACK_URL"
     else
       die "Не удалось найти .deb ссылку. Укажите URL вручную: --omada-url <URL>"
+    fi
+  fi
+
+  # Защита от даунгрейда / проверка актуальности при успешном парсинге
+  NEW_VER="$(ver_from_url "$raw_url")"
+  if [[ -n "$INSTALLED_VER" && -n "$NEW_VER" ]]; then
+    if [[ "$NEW_VER" == "$INSTALLED_VER" ]]; then
+      info "Установлена актуальная версия $INSTALLED_VER — переустановка того же пакета."
+    elif [[ "$(printf '%s\n%s\n' "$INSTALLED_VER" "$NEW_VER" | sort -V | tail -n1)" == "$INSTALLED_VER" ]]; then
+      die "Найденная версия $NEW_VER старше установленной $INSTALLED_VER (даунгрейд). Укажите URL вручную: --omada-url <URL>"
+    else
+      info "Доступно обновление: $INSTALLED_VER -> $NEW_VER"
     fi
   fi
 
